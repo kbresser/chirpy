@@ -10,6 +10,20 @@ import (
 	"github.com/kbresser/chirpy/internal/database"
 )
 
+func (cfg *apiConfig) getAuthenticatedUserID(r *http.Request) (uuid.UUID, error) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.Secret)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	return userID, nil
+}
+
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email    string `json:"email"`
@@ -17,10 +31,11 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	}
 
 	type returnVals struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
+		ID          uuid.UUID `json:"id"`
+		CreatedAt   time.Time `json:"created_at"`
+		UpdatedAt   time.Time `json:"updated_at"`
+		Email       string    `json:"email"`
+		IsChirpyRed bool      `json:"is_chirpy_red"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -49,10 +64,11 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	}
 
 	respondWithJSON(w, 201, returnVals{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt.Time,
-		UpdatedAt: user.UpdatedAt.Time,
-		Email:     user.Email,
+		ID:          user.ID,
+		CreatedAt:   user.CreatedAt.Time,
+		UpdatedAt:   user.UpdatedAt.Time,
+		Email:       user.Email,
+		IsChirpyRed: user.IsChirpyRed,
 	})
 }
 
@@ -70,6 +86,7 @@ func (cfg *apiConfig) handlerUserLogin(w http.ResponseWriter, r *http.Request) {
 		Email        string    `json:"email"`
 		Token        string    `json:"token"`
 		RefreshToken string    `json:"refresh_token"`
+		IsChirpyRed  bool      `json:"is_chirpy_red"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -124,6 +141,7 @@ func (cfg *apiConfig) handlerUserLogin(w http.ResponseWriter, r *http.Request) {
 		Email:        user.Email,
 		Token:        token,
 		RefreshToken: refreshToken,
+		IsChirpyRed:  user.IsChirpyRed,
 	})
 }
 
@@ -134,8 +152,9 @@ func (cfg *apiConfig) handlerUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type response struct {
-		ID    uuid.UUID `json:"id"`
-		Email string    `json:"email"`
+		ID          uuid.UUID `json:"id"`
+		Email       string    `json:"email"`
+		IsChirpyRed bool      `json:"is_chirpy_red"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -170,22 +189,46 @@ func (cfg *apiConfig) handlerUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user, err := cfg.db.GetUserByID(r.Context(), userID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldnt not fetch user", err)
+		return
+	}
+
 	respondWithJSON(w, http.StatusOK, response{
-		Email: params.Email,
-		ID:    userID,
+		Email:       user.Email,
+		ID:          user.ID,
+		IsChirpyRed: user.IsChirpyRed,
 	})
 }
 
-func (cfg *apiConfig) getAuthenticatedUserID(r *http.Request) (uuid.UUID, error) {
-	token, err := auth.GetBearerToken(r.Header)
-	if err != nil {
-		return uuid.Nil, err
+func (cfg *apiConfig) handlerUpgrade(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserId uuid.UUID `json:"user_id"`
+		} `json:"data"`
 	}
 
-	userID, err := auth.ValidateJWT(token, cfg.Secret)
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
 	if err != nil {
-		return uuid.Nil, err
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
+		return
 	}
 
-	return userID, nil
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	err = cfg.db.ChirpyRed(r.Context(), params.Data.UserId)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+
 }
