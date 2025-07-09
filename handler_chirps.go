@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -91,17 +92,55 @@ func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mainChirps := []Chirp{}
+	sortParam := r.URL.Query().Get("sort")
+	if sortParam == "" {
+		sortParam = "asc"
+	}
 
-	for i := range chirps {
-		chirp := Chirp{
-			ID:        chirps[i].ID,
-			CreatedAt: chirps[i].CreatedAt,
-			UpdatedAt: chirps[i].UpdatedAt,
-			Body:      chirps[i].Body,
-			UserID:    chirps[i].UserID,
+	switch sortParam {
+	case "asc":
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].CreatedAt.Before(chirps[j].CreatedAt)
+		})
+	case "desc":
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+		})
+	}
+
+	mainChirps := []Chirp{}
+	s := r.URL.Query().Get("author_id")
+
+	if s == "" {
+		for i := range chirps {
+			returnChirp := Chirp{
+				ID:        chirps[i].ID,
+				CreatedAt: chirps[i].CreatedAt,
+				UpdatedAt: chirps[i].UpdatedAt,
+				Body:      chirps[i].Body,
+				UserID:    chirps[i].UserID,
+			}
+			mainChirps = append(mainChirps, returnChirp)
 		}
-		mainChirps = append(mainChirps, chirp)
+	} else {
+		authorID, err := uuid.Parse(s)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Something has gone wrong", err)
+			return
+		}
+		for i, chirp := range chirps {
+			if chirp.UserID == authorID {
+				returnChirp := Chirp{
+					ID:        chirps[i].ID,
+					CreatedAt: chirps[i].CreatedAt,
+					UpdatedAt: chirps[i].UpdatedAt,
+					Body:      chirps[i].Body,
+					UserID:    chirps[i].UserID,
+				}
+
+				mainChirps = append(mainChirps, returnChirp)
+			}
+		}
 	}
 
 	respondWithJSON(w, http.StatusOK, mainChirps)
